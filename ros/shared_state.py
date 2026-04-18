@@ -1,8 +1,9 @@
 import time
 import threading
 import numpy as np
+from scipy.spatial.transform import Rotation
 
-from config import TRANSLATION_SCALE, ROTATION_SCALE, WATCHDOG_TIMEOUT
+from config import TRANSLATION_SCALE, ROTATION_SCALE, WATCHDOG_TIMEOUT, CONTROL_RATE, TRACKING_GAIN_HZ, DAMPING_RATIO, MAX_LINEAR_VEL, MAX_ANGULAR_VEL
 
 
 def _rx(a):
@@ -23,12 +24,27 @@ class SharedState:
         self._lock = threading.Lock()
         self._n = n_arm_joints
 
-        # 目标末端位姿（由 Twist 累积更新）
+        # 每控制周期的速度上限（饱和裁剪用）
+        self._max_linear_step  = MAX_LINEAR_VEL  / CONTROL_RATE
+        self._max_angular_step = MAX_ANGULAR_VEL / CONTROL_RATE
+        # PD 增益（per-cycle）
+        self._kp = TRACKING_GAIN_HZ / CONTROL_RATE
+        self._kd = DAMPING_RATIO * self._kp   # D项：error变化率加权，误差收缩时产生制动力
+
+        # 上一周期误差，用于计算 D 项
+        self._prev_linear_error  = np.zeros(3)
+        self._prev_angular_error = np.zeros(3)  # rotvec 表示
+
+        # 目标末端位姿（hard target，由 Twist 累积更新，可能跳变）
         self.target_position = np.zeros(3)
         self.target_rotation = np.eye(3, dtype=float)
 
+        # smooth target：每控制周期向 hard target 限速步进，IK 使用此值
+        self._smooth_position = self.target_position.copy()
+        self._smooth_rotation = self.target_rotation.copy()
+
         # 待处理的 Twist 增量（累加，不丢帧）
-        self._pending_twist = None          # (linear_xyz, angular_xyz)
+        self._pending_twist = None
 
         # 夹爪目标（归一化 0=closed 1=open）
         self.target_gripper_pos: float = 1.0
@@ -73,19 +89,53 @@ class SharedState:
         rx, ry, rz = np.array(angular_xyz) * ROTATION_SCALE
         with self._lock:
             self.target_position += np.array([lx, ly, lz])
-            # 左乘 = 在世界坐标系下旋转，右乘则是在末端坐标系下旋转
+            # 左乘 = 在世界坐标系下旋转
             if rx: self.target_rotation = _rx(rx) @ self.target_rotation
             if ry: self.target_rotation = _ry(ry) @ self.target_rotation
             if rz: self.target_rotation = _rz(rz) @ self.target_rotation
+
+    def step_smooth_target(self):
+        """将 smooth target 向 hard target 步进一个控制周期，返回 (pos, rot) 供 IK 使用。
+
+        线性部分：若误差超过最大步长则按方向裁剪；
+        旋转部分：用 SLERP 在误差角度方向上步进最多 max_angular_step。
+        """
+        with self._lock:
+            # ── 线性 PD ───────────────────────────────
+            err  = self.target_position - self._smooth_position
+            step = self._kp * err + self._kd * (err - self._prev_linear_error)
+            mag  = np.linalg.norm(step)
+            if mag > self._max_linear_step:
+                step = step / mag * self._max_linear_step
+            self._prev_linear_error = err.copy()
+            self._smooth_position  += step
+
+            # ── 旋转 PD（误差用 rotvec 表示）────────────
+            r_curr  = Rotation.from_matrix(self._smooth_rotation)
+            r_tgt   = Rotation.from_matrix(self.target_rotation)
+            err_rv  = (r_curr.inv() * r_tgt).as_rotvec()
+            omega   = self._kp * err_rv + self._kd * (err_rv - self._prev_angular_error)
+            ang_mag = np.linalg.norm(omega)
+            if ang_mag > self._max_angular_step:
+                omega = omega / ang_mag * self._max_angular_step
+            self._prev_angular_error = err_rv.copy()
+            self._smooth_rotation    = (r_curr * Rotation.from_rotvec(omega)).as_matrix()
+
+            return self._smooth_position.copy(), self._smooth_rotation.copy()
 
     def get_target(self):
         with self._lock:
             return self.target_position.copy(), self.target_rotation.copy()
 
     def reset_target_to(self, position, rotation):
+        """复位时同步重置 smooth target 和 PD 历史，避免复位后产生跳变。"""
         with self._lock:
-            self.target_position = np.array(position)
-            self.target_rotation = np.array(rotation, dtype=float)
+            self.target_position     = np.array(position)
+            self.target_rotation     = np.array(rotation, dtype=float)
+            self._smooth_position    = self.target_position.copy()
+            self._smooth_rotation    = self.target_rotation.copy()
+            self._prev_linear_error  = np.zeros(3)
+            self._prev_angular_error = np.zeros(3)
 
     # ── Watchdog ───────────────────────────────
     def is_watchdog_ok(self):

@@ -30,6 +30,12 @@ SAFE_MOVE_TIME = float(_cfg["safe_position"]["move_time_s"])
 TRANSLATION_SCALE = float(_cfg["twist_scale"]["translation_m"])
 ROTATION_SCALE    = float(_cfg["twist_scale"]["rotation_rad"])
 
+# ── Smooth target 速度限幅 ────────────────────
+MAX_LINEAR_VEL   = float(_cfg["smoothing"]["max_linear_vel_m_s"])
+MAX_ANGULAR_VEL  = float(_cfg["smoothing"]["max_angular_vel_rad_s"])
+TRACKING_GAIN_HZ = float(_cfg["smoothing"]["tracking_gain_hz"])
+DAMPING_RATIO    = float(_cfg["smoothing"]["damping_ratio"])
+
 # ── 关节名称 ──────────────────────────────────
 JOINT_NAMES = list(_cfg["joints"]["names"])
 

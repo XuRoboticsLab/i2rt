@@ -85,7 +85,7 @@ def control_loop(robot, kin, state: SharedState, stop_event: threading.Event,
             continue
 
         # ── 4. IK + 发送指令 ──────────────────────
-        target_pos, target_rot = state.get_target()
+        target_pos, target_rot = state.step_smooth_target()
         target_T = np.eye(4)
         target_T[:3, :3] = target_rot
         target_T[:3, 3]  = target_pos
