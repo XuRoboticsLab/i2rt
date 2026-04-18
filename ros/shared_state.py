@@ -73,9 +73,10 @@ class SharedState:
         rx, ry, rz = np.array(angular_xyz) * ROTATION_SCALE
         with self._lock:
             self.target_position += np.array([lx, ly, lz])
-            if rx: self.target_rotation = self.target_rotation @ _rx(rx)
-            if ry: self.target_rotation = self.target_rotation @ _ry(ry)
-            if rz: self.target_rotation = self.target_rotation @ _rz(rz)
+            # 左乘 = 在世界坐标系下旋转，右乘则是在末端坐标系下旋转
+            if rx: self.target_rotation = _rx(rx) @ self.target_rotation
+            if ry: self.target_rotation = _ry(ry) @ self.target_rotation
+            if rz: self.target_rotation = _rz(rz) @ self.target_rotation
 
     def get_target(self):
         with self._lock:
