@@ -510,11 +510,15 @@ class MotorChainRobot(Robot):
                 pos = np.clip(pos, self._joint_limits[:, 0], self._joint_limits[:, 1])
         return pos
 
-    def command_joint_pos(self, joint_pos: np.ndarray) -> None:
+    def command_joint_pos(
+        self, joint_pos: np.ndarray, feedforward_torques: Optional[np.ndarray] = None
+    ) -> None:
         """Command the leader robot to a given state.
 
         Args:
             joint_pos (np.ndarray): The state to command the leader robot to.
+            feedforward_torques (np.ndarray | None): Optional per-joint feedforward torques (Nm)
+                added on top of gravity compensation. Shape must match motor chain length.
         """
         pos = self._clip_robot_joint_pos_command(joint_pos)
         with self._command_lock:
@@ -522,6 +526,8 @@ class MotorChainRobot(Robot):
             self._commands.pos = self.remapper.to_robot_joint_pos_space(pos)
             self._commands.kp = self._kp
             self._commands.kd = self._kd
+            if feedforward_torques is not None:
+                self._commands.torques = feedforward_torques
 
     def command_joint_state(self, joint_state: Dict[str, np.ndarray]) -> None:
         """Command the leader robot to a given state.

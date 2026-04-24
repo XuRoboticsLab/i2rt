@@ -1,4 +1,4 @@
-can_channel: "can0"
+can_channel: "can_left"
 gripper_type: "linear_4310"   # linear_4310 | linear_3507 | crank_4310 | no_gripper
 site_name: "grasp_site"
 
@@ -41,10 +41,10 @@ joints:
 
 topics:
   subscribe:
-    cmd:     "/joystick/right/cmd"
-    gripper: "/joystick/right/gripper"
-    reset:   "/joystick/right/reset"
-    init:    "/joystick/right/init"
+    cmd:     "/joystick/left/cmd"
+    gripper: "/joystick/left/gripper"
+    reset:   "/joystick/left/reset"
+    init:    "/joystick/left/init"
   publish:
     joints:  "/yam/joint_states"
     ee:      "/yam/end_effector"

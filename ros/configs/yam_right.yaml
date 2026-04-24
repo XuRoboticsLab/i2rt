@@ -1,4 +1,4 @@
-can_channel: "can0"
+can_channel: "can_right"
 gripper_type: "linear_4310"   # linear_4310 | linear_3507 | crank_4310 | no_gripper
 site_name: "grasp_site"
 

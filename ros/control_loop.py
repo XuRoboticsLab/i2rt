@@ -2,7 +2,7 @@ import time
 import threading
 import numpy as np
 
-from config import CONTROL_RATE, SAFE_JOINT_POS, SAFE_MOVE_TIME
+from config import CONTROL_RATE, SAFE_JOINT_POS, SAFE_MOVE_TIME, IK_DAMPING, IK_JOINT_CENTER_GAIN, IK_MAX_JOINT_STEP
 from shared_state import SharedState
 
 
@@ -72,10 +72,10 @@ def control_loop(robot, kin, state: SharedState, stop_event: threading.Event,
             time.sleep(max(0.0, interval - (time.time() - t0)))
             continue
 
-        # ── 2. 消费 Twist 增量 ────────────────────
+        # ── 2. 消费 Twist 偏移量（位置控制：直接设置目标，不累加）────
         twist = state.pop_twist()
         if twist is not None:
-            state.apply_twist_to_target(twist[0], twist[1])
+            state.set_target_from_offset(twist[0], twist[1])
 
         # ── 3. Watchdog ───────────────────────────
         if not state.is_watchdog_ok():
@@ -94,14 +94,23 @@ def control_loop(robot, kin, state: SharedState, stop_event: threading.Event,
             target_T,
             site_name,
             init_q=state.last_valid_joint_pos,
+            damping=IK_DAMPING,
+            joint_center_gain=IK_JOINT_CENTER_GAIN,
         )
 
         if success:
+            # 关节空间速度限幅：防止 IK 在奇异附近跳出大幅解
+            q_arm = q_sol[:n_arm]
+            delta = q_arm - state.last_valid_joint_pos
+            max_delta = np.max(np.abs(delta))
+            if max_delta > IK_MAX_JOINT_STEP:
+                q_arm = state.last_valid_joint_pos + delta * (IK_MAX_JOINT_STEP / max_delta)
+
             with state._lock:
                 grip = state.target_gripper_pos
-            full_q = np.append(q_sol[:n_arm], grip) if has_gripper else q_sol[:n_arm]
+            full_q = np.append(q_arm, grip) if has_gripper else q_arm
             robot.command_joint_pos(full_q)
-            state.last_valid_joint_pos = q_sol[:n_arm].copy()
+            state.last_valid_joint_pos = q_arm.copy()
         else:
             _hold(robot, state)
 

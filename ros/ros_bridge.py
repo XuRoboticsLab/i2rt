@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation
 from config import (
     PUBLISH_RATE,
     JOINT_NAMES,
-    TOPIC_CMD, TOPIC_GRIPPER, TOPIC_RESET,
+    TOPIC_CMD, TOPIC_GRIPPER, TOPIC_RESET, TOPIC_INIT,
     TOPIC_JOINTS, TOPIC_EE,
 )
 from shared_state import SharedState
@@ -48,6 +48,17 @@ def make_reset_callback(state: SharedState):
     return callback
 
 
+def make_init_callback(state: SharedState):
+    """Grip 单击时 Pico 发送 init 信号，记录当前末端位姿为位置控制校准基准。"""
+    def callback(msg):
+        if msg["data"]:
+            with state._lock:
+                fk_pos = np.array(state.fk_position)
+                fk_rot = state.fk_rotation.copy()
+            state.set_calibration_pose(fk_pos, fk_rot)
+    return callback
+
+
 # ── 订阅管理 ────────────────────────────────
 class RosSubscribers:
     def __init__(self, ros: roslibpy.Ros, state: SharedState):
@@ -55,11 +66,13 @@ class RosSubscribers:
             roslibpy.Topic(ros, TOPIC_CMD,     "geometry_msgs/Twist"),
             roslibpy.Topic(ros, TOPIC_GRIPPER, "std_msgs/Int8"),
             roslibpy.Topic(ros, TOPIC_RESET,   "std_msgs/Bool"),
+            roslibpy.Topic(ros, TOPIC_INIT,    "std_msgs/Bool"),
         ]
         self._subs[0].subscribe(make_cmd_callback(state))
         self._subs[1].subscribe(make_gripper_callback(state))
         self._subs[2].subscribe(make_reset_callback(state))
-        print(f"[ROS] 已订阅 {TOPIC_CMD}, {TOPIC_GRIPPER}, {TOPIC_RESET}")
+        self._subs[3].subscribe(make_init_callback(state))
+        print(f"[ROS] 已订阅 {TOPIC_CMD}, {TOPIC_GRIPPER}, {TOPIC_RESET}, {TOPIC_INIT}")
 
     def unsubscribe_all(self):
         for sub in self._subs:

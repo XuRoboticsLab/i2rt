@@ -19,6 +19,9 @@ class Kinematics:
         model = mujoco.MjModel.from_xml_path(xml_path)
         self._configuration = mink.Configuration(model)
         self._site_name = site_name
+        # 关节中心位（用于 IK 正则化，远离限位和奇点）
+        self._joint_centers = (model.jnt_range[:, 0] + model.jnt_range[:, 1]) / 2.0
+        self._n_joints = model.nq
 
     def fk(self, q: np.ndarray, site_name: Optional[str] = None) -> np.ndarray:
         """Compute the forward kinematics for the given joint configuration.
@@ -46,7 +49,8 @@ class Kinematics:
         solver: str = "quadprog",
         pos_threshold: float = 1e-4,
         ori_threshold: float = 1e-4,
-        damping: float = 1e-4,
+        damping: float = 1e-3,
+        joint_center_gain: float = 1e-3,
         max_iters: int = 200,
         verbose: bool = False,
     ) -> Tuple[bool, np.ndarray]:
@@ -87,8 +91,10 @@ class Kinematics:
         for j in range(max_iters):
             vel = mink.solve_ik(self._configuration, tasks, dt, solver, damping=damping, limits=limits)
             self._configuration.integrate_inplace(vel, dt)
-            err = end_effector_task.compute_error(self._configuration)
 
+            # 收敛检测必须在 nudge 之前：nudge 会改变 configuration，
+            # 若放在之后会导致收敛条件永远无法触发
+            err = end_effector_task.compute_error(self._configuration)
             pos_achieved = np.linalg.norm(err[:3]) <= pos_threshold
             ori_achieved = np.linalg.norm(err[3:]) <= ori_threshold
             if pos_achieved and ori_achieved:
@@ -99,6 +105,12 @@ class Kinematics:
                         f"Exiting after {j} iterations, configuration: {self._configuration.q}, time taken: {elapsed_time:.4f} seconds"
                     )
                 return True, self._configuration.q
+
+            # nudge 在收敛检测之后执行，仅在未收敛时引导搜索方向
+            if joint_center_gain > 0.0:
+                q = self._configuration.q.copy()
+                q[:self._n_joints] += joint_center_gain * (self._joint_centers - q[:self._n_joints])
+                self._configuration.update(q)
 
         end_time = time.time()  # End timing
         elapsed_time = end_time - start_time

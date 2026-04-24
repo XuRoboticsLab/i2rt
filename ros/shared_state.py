@@ -35,7 +35,7 @@ class SharedState:
         self._prev_linear_error  = np.zeros(3)
         self._prev_angular_error = np.zeros(3)  # rotvec 表示
 
-        # 目标末端位姿（hard target，由 Twist 累积更新，可能跳变）
+        # 目标末端位姿（hard target，由 Twist 偏移量直接设置）
         self.target_position = np.zeros(3)
         self.target_rotation = np.eye(3, dtype=float)
 
@@ -43,7 +43,11 @@ class SharedState:
         self._smooth_position = self.target_position.copy()
         self._smooth_rotation = self.target_rotation.copy()
 
-        # 待处理的 Twist 增量（累加，不丢帧）
+        # 校准基准：Grip 单击时记录的机械臂末端位姿
+        self.calibration_position: np.ndarray | None = None
+        self.calibration_rotation: np.ndarray | None = None
+
+        # 待处理的 Twist 偏移量（last-wins，取最新值）
         self._pending_twist = None
 
         # 夹爪目标（归一化 0=closed 1=open）
@@ -66,16 +70,27 @@ class SharedState:
         # 上一次有效 IK 结果（arm joints only）
         self.last_valid_joint_pos = np.zeros(n_arm_joints)
 
+    # ── Calibration ────────────────────────────
+    def set_calibration_pose(self, pos, rot):
+        """Grip 单击时由 ROS 回调调用，记录当前末端位姿为位置控制基准。"""
+        with self._lock:
+            self.calibration_position = np.array(pos, dtype=float)
+            self.calibration_rotation = np.array(rot, dtype=float)
+            # 同步 hard/smooth target，避免校准后出现初始跳变
+            self.target_position    = self.calibration_position.copy()
+            self.target_rotation    = self.calibration_rotation.copy()
+            self._smooth_position   = self.calibration_position.copy()
+            self._smooth_rotation   = self.calibration_rotation.copy()
+            self._prev_linear_error  = np.zeros(3)
+            self._prev_angular_error = np.zeros(3)
+            self._pending_twist      = None
+        print("[State] 校准基准已更新")
+
     # ── Twist ──────────────────────────────────
     def push_twist(self, linear_xyz, angular_xyz):
         with self._lock:
-            if self._pending_twist is None:
-                self._pending_twist = (np.array(linear_xyz), np.array(angular_xyz))
-            else:
-                self._pending_twist = (
-                    self._pending_twist[0] + np.array(linear_xyz),
-                    self._pending_twist[1] + np.array(angular_xyz),
-                )
+            # 位置控制：Pico 发送的是绝对偏移量，取最新值即可
+            self._pending_twist = (np.array(linear_xyz), np.array(angular_xyz))
             self.last_cmd_time = time.time()
 
     def pop_twist(self):
@@ -84,15 +99,15 @@ class SharedState:
             self._pending_twist = None
         return twist
 
-    def apply_twist_to_target(self, linear_xyz, angular_xyz):
-        lx, ly, lz = np.array(linear_xyz) * TRANSLATION_SCALE
-        rx, ry, rz = np.array(angular_xyz) * ROTATION_SCALE
+    def set_target_from_offset(self, linear_xyz, angular_xyz):
+        """位置控制：target = 校准基准 + Pico 偏移量（直接设置，不累加）。"""
+        if self.calibration_position is None:
+            return
+        pos_offset = np.array(linear_xyz) * TRANSLATION_SCALE
+        rot_offset = Rotation.from_rotvec(np.array(angular_xyz) * ROTATION_SCALE).as_matrix()
         with self._lock:
-            self.target_position += np.array([lx, ly, lz])
-            # 左乘 = 在世界坐标系下旋转
-            if rx: self.target_rotation = _rx(rx) @ self.target_rotation
-            if ry: self.target_rotation = _ry(ry) @ self.target_rotation
-            if rz: self.target_rotation = _rz(rz) @ self.target_rotation
+            self.target_position = self.calibration_position + pos_offset
+            self.target_rotation = rot_offset @ self.calibration_rotation
 
     def step_smooth_target(self):
         """将 smooth target 向 hard target 步进一个控制周期，返回 (pos, rot) 供 IK 使用。
@@ -113,13 +128,13 @@ class SharedState:
             # ── 旋转 PD（误差用 rotvec 表示）────────────
             r_curr  = Rotation.from_matrix(self._smooth_rotation)
             r_tgt   = Rotation.from_matrix(self.target_rotation)
-            err_rv  = (r_curr.inv() * r_tgt).as_rotvec()
+            err_rv  = (r_tgt * r_curr.inv()).as_rotvec()
             omega   = self._kp * err_rv + self._kd * (err_rv - self._prev_angular_error)
             ang_mag = np.linalg.norm(omega)
             if ang_mag > self._max_angular_step:
                 omega = omega / ang_mag * self._max_angular_step
             self._prev_angular_error = err_rv.copy()
-            self._smooth_rotation    = (r_curr * Rotation.from_rotvec(omega)).as_matrix()
+            self._smooth_rotation    = (Rotation.from_rotvec(omega) * r_curr).as_matrix()
 
             return self._smooth_position.copy(), self._smooth_rotation.copy()
 

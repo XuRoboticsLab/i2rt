@@ -26,6 +26,11 @@ WATCHDOG_TIMEOUT = float(_cfg["rates"]["watchdog_timeout_s"])
 SAFE_JOINT_POS = list(_cfg["safe_position"]["joint_pos"])
 SAFE_MOVE_TIME = float(_cfg["safe_position"]["move_time_s"])
 
+# ── IK 参数 ───────────────────────────────────
+IK_DAMPING           = float(_cfg["ik"]["damping"])
+IK_JOINT_CENTER_GAIN = float(_cfg["ik"]["joint_center_gain"])
+IK_MAX_JOINT_STEP    = float(_cfg["ik"]["max_joint_step_rad"])
+
 # ── Twist 缩放 ────────────────────────────────
 TRANSLATION_SCALE = float(_cfg["twist_scale"]["translation_m"])
 ROTATION_SCALE    = float(_cfg["twist_scale"]["rotation_rad"])
@@ -43,5 +48,6 @@ JOINT_NAMES = list(_cfg["joints"]["names"])
 TOPIC_CMD     = _cfg["topics"]["subscribe"]["cmd"]
 TOPIC_GRIPPER = _cfg["topics"]["subscribe"]["gripper"]
 TOPIC_RESET   = _cfg["topics"]["subscribe"]["reset"]
+TOPIC_INIT    = _cfg["topics"]["subscribe"]["init"]
 TOPIC_JOINTS  = _cfg["topics"]["publish"]["joints"]
 TOPIC_EE      = _cfg["topics"]["publish"]["ee"]
